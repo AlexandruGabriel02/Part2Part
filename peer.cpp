@@ -24,7 +24,6 @@
 sockaddr_in indexServer;
 int port;
 std::string hostname;
-bool connectedToIndex;
 
 namespace Utils
 {
@@ -47,7 +46,6 @@ namespace Client
         CHECK_EXIT(connect(indexSocket, (sockaddr*) &indexServer, sizeof(indexServer)), "connection error");
 
         printf("conectat cu socketul %d\n", indexSocket);
-        connectedToIndex = true;
     }
 
     void* run(void* arg)
@@ -106,8 +104,6 @@ void initPeer(char* argv[])
 
     printf("Choose a nickname: ");
     std::cin >> hostname; 
-
-    connectedToIndex = false;
 
     indexServer.sin_addr.s_addr = inet_addr(argv[1]);
     indexServer.sin_family = AF_INET;
