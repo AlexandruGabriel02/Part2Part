@@ -45,12 +45,23 @@ void initServer(sockaddr_in& server, int& serverSocket)
     CHECK_EXIT(listen(serverSocket, MAX_CONNECTION_QUEUE), "listen");
 }
 
+void killThread(const char* message)
+{
+    printf("%s\n", message);
+    pthread_exit(NULL);
+}
+
 void readCommand(int socket, char buff[])
 {
-    int msgLength;
-    read(socket, &msgLength, sizeof(msgLength));
+    int msgLength, bytes;
+    bytes = read(socket, &msgLength, sizeof(msgLength));
+    if (bytes <= 0)
+        killThread("Read error. Peer probably closed unexpectedly\n");
 
-    read(socket, buff, msgLength);
+    bytes = read(socket, buff, msgLength);
+    if (bytes <= 0)
+        killThread("Read error. Peer probably closed unexpectedly\n");
+
     buff[msgLength] = '\0';
 }
 
