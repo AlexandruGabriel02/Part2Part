@@ -11,6 +11,9 @@
 #include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sstream>
+#include <filesystem>
+#include <dirent.h>
 
 #define MAX_SIZE 4096
 #define MAX_CONNECTION_QUEUE 5
@@ -24,10 +27,10 @@
 sockaddr_in indexServer;
 int port;
 std::string hostname;
+std::string downLocation = ".";
 
 namespace Utils
 {
-
     enum cmdType
     {
         CMD_SEARCH,
@@ -51,23 +54,71 @@ namespace Utils
     cmdType validateCommand(char command[])
     {
         int index;
+        //extrag primul cuvant (numele de comanda)
+        std::stringstream ss(command);
+        std::string cmdName;
+        ss >> cmdName;
+
         for (index = 0; index < cmdCount; index++)
-            if (strcmp(command, validCmd[index]) == 0)
+            if (cmdName == validCmd[index])
                 return (cmdType) index;
         
         return (cmdType) index;
     }
 
+    void executeDisconnect(char command[], int socket)
+    {
+        writeToServer(socket, command);
+        close(socket);
+        exit(0);
+    }
+
+    bool isDirectory(const std::string& location)
+    {
+        if (opendir(location.c_str()))
+            return true;
+        return false;
+    }
+
+    void executeDownLocation(char command[])
+    {
+        std::string location, dummy;
+        std::stringstream ss(command);
+        ss >> dummy >> location;
+        dummy.clear();
+        ss >> dummy;
+
+        if (dummy.size() > 0)
+        {
+            printf("Too many arguments for this command\n");
+            fflush(stdout);
+            return;
+        }
+
+        if (!isDirectory(location))
+        {
+            printf("Invalid / non existent directory!\n");
+            fflush(stdout);
+            return;
+        }
+
+        downLocation = location;
+        printf("New download folder set successfully!\n");
+        fflush(stdout);
+    }
+
     void executeCommand(char command[], int socket, cmdType type)
     {
-        if (type == CMD_DISCONNECT)
+        switch(type)
         {
-            close(socket);
-            exit(0);
-        }
-        else 
-        {
-            printf("alta comanda\n");
+            case CMD_DISCONNECT:
+                executeDisconnect(command, socket);
+                break;
+            case CMD_DOWNLOCATION:
+                executeDownLocation(command);
+                break;
+            default:
+                break;
         }
     }
 
@@ -129,7 +180,6 @@ namespace Client
                 continue;
             }
 
-            Utils::writeToServer(indexSocket, buff);
             Utils::executeCommand(buff, indexSocket, type);
         }
 

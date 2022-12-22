@@ -30,6 +30,11 @@ struct threadArgs
     int clientSocket;
 };
 
+class DBManager
+{
+
+};
+
 void initServer(sockaddr_in& server, int& serverSocket)
 {
     CHECK_EXIT(serverSocket = socket(AF_INET, SOCK_STREAM, 0), "server socket");
