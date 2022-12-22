@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include <netinet/in.h>
+#include <mysql/mysql.h>
 
 #define PORT 2908
 #define MAX_SIZE 4096
@@ -32,8 +33,33 @@ struct threadArgs
 
 class DBManager
 {
+private:
+    MYSQL* con;
+    void db_error_kill()
+    {
+        fprintf(stderr, "%s\n", mysql_error(con));
+        mysql_close(con);
+        exit(-1);
+    }
+public:
+    DBManager()
+    {
+        con = mysql_init(NULL);
 
+        if (con == NULL)
+            db_error_kill();
+    }
+
+    void connect(const char* user, const char* pass, const char* dbName)
+    {
+        if (mysql_real_connect(con, "localhost", user, pass, dbName, 0, NULL, 0) == NULL)
+            db_error_kill();
+        printf("Connected to the MySQL database\n");
+        fflush(stdout);
+    }
 };
+
+DBManager db;
 
 void initServer(sockaddr_in& server, int& serverSocket)
 {
@@ -97,6 +123,8 @@ int main(int argc, char* argv[])
     int serverSocket;
 
     initServer(server, serverSocket);    
+    db.connect("test_user", "XRVSskp42ABC@!", "peers");
+
 
     INFINITE_LOOP 
     {   
