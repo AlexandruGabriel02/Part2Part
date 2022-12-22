@@ -16,8 +16,8 @@
 #define MAX_CONNECTION_QUEUE 5
 
 #define CHECK_EXIT(value, msg) { if ((value) < 0) {perror(msg); exit(-1);} }
-#define CHECK_WARN(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); fflush(stdout);} }
-#define CHECK_CONTINUE(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); fflush(stdout); continue;} }
+#define CHECK_WARN(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout);} }
+#define CHECK_CONTINUE(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout); continue;} }
 
 #define INFINITE_LOOP while(1)
 
@@ -27,11 +27,71 @@ std::string hostname;
 
 namespace Utils
 {
-    void writeCommand(int socket, char buff[])
+
+    enum cmdType
+    {
+        CMD_SEARCH,
+        CMD_DOWNLOAD,
+        CMD_PUBLISH,
+        CMD_UNPUBLISH,
+        CMD_DISCONNECT,
+        CMD_DOWNLOCATION,
+        CMD_UNKNOWN
+    };
+    const char* validCmd[] = {"search", "download", "publish", "unpublish", "disconnect", "downlocation"};
+    const int cmdCount = 6;
+
+    void writeToServer(int socket, char buff[])
     {
         int msgLength = strlen(buff);
         write(socket, &msgLength, sizeof(msgLength));
         write(socket, buff, msgLength);
+    }
+
+    cmdType validateCommand(char command[])
+    {
+        int index;
+        for (index = 0; index < cmdCount; index++)
+            if (strcmp(command, validCmd[index]) == 0)
+                return (cmdType) index;
+        
+        return (cmdType) index;
+    }
+
+    void executeCommand(char command[], int socket, cmdType type)
+    {
+        if (type == CMD_DISCONNECT)
+        {
+            close(socket);
+            exit(0);
+        }
+        else 
+        {
+            printf("alta comanda\n");
+        }
+    }
+
+    int readInput(char command[])
+    {
+        char ch;
+        int size = 0;
+        bool size_exceeded = false;
+        while (read(STDIN_FILENO, &ch, 1))
+        {
+            if (ch == '\n')
+                break;
+
+            if (size >= MAX_SIZE)
+                size_exceeded = true;
+            else
+                command[size++] = ch;
+        }
+        if (size_exceeded)
+            return -1;
+
+        command[size] = '\0';
+
+        return size;
     }
 };
 
@@ -57,14 +117,20 @@ namespace Client
             char buff[MAX_SIZE];
             printf(">: ");
             fflush(stdout);
-            std::cin >> buff;
 
-            Utils::writeCommand(indexSocket, buff);
-            if (strcmp(buff, "disconnect") == 0)
+            CHECK_CONTINUE(Utils::readInput(buff), "Max input size exceeded");
+
+            Utils::cmdType type;
+            type = Utils::validateCommand(buff);
+            if (type == Utils::CMD_UNKNOWN)
             {
-                close(indexSocket);
-                exit(0);
+                printf("Unknown command!\n");
+                fflush(stdout);
+                continue;
             }
+
+            Utils::writeToServer(indexSocket, buff);
+            Utils::executeCommand(buff, indexSocket, type);
         }
 
         return NULL;
