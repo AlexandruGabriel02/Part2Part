@@ -12,6 +12,7 @@
 #include <strings.h>
 #include <netinet/in.h>
 #include <mysql/mysql.h>
+#include <arpa/inet.h>
 
 #define PORT 2908
 #define MAX_SIZE 4096
@@ -29,6 +30,25 @@ struct threadArgs
     pthread_t threadId;
     sockaddr_in client;
     int clientSocket;
+};
+
+enum cmdType
+{
+    CMD_SEARCH,
+    CMD_DOWNLOAD,
+    CMD_PUBLISH,
+    CMD_UNPUBLISH,
+    CMD_DISCONNECT,
+    CMD_DOWNLOCATION,
+    CMD_UNKNOWN
+};
+
+struct publishedFile
+{
+    char name[MAX_SIZE];
+    double size;
+    //fileType type;
+    //md5hash
 };
 
 class DBManager
@@ -82,7 +102,7 @@ void killThread(const char* message)
     pthread_exit(NULL);
 }
 
-void readCommand(int socket, char buff[])
+void readFromClient(int socket, char buff[])
 {
     int msgLength, bytes;
     bytes = read(socket, &msgLength, sizeof(msgLength));
@@ -96,23 +116,91 @@ void readCommand(int socket, char buff[])
     buff[msgLength] = '\0';
 }
 
+template<class T>
+void readFromClient(int socket, T& data)
+{
+    int dataSize, bytes;
+    bytes = read(socket, &dataSize, sizeof(dataSize));
+    if (bytes <= 0)
+        killThread("Read error. Peer probably closed unexpectedly\n");
+
+    bytes = read(socket, &data, dataSize);
+    if (bytes <= 0)
+        killThread("Read error. Peer probably closed unexpectedly\n");
+}
+
+void executeDisconnect(const sockaddr_in& client, const char* peerName, 
+                      int openPeerPort)
+{
+    //sterge inregistrarile din baza de date
+}
+
+void executePublish(int socket, const sockaddr_in& client,
+                    const char* peerName, int openPeerPort)
+{
+    //adauga in baza de date
+    publishedFile file;
+    readFromClient(socket, file);
+
+    printf("Am primit fisierul %s de dimensiune %f de la %s\n", file.name, file.size, peerName);
+}
+
+void executeUnpublish(int socket, const sockaddr_in& client,
+                    const char* peerName, int openPeerPort)
+{
+    //scoate fisierul din baza de date
+    publishedFile file;
+    readFromClient(socket, file);
+
+    printf("Am primit fisierul %s de dimensiune %f de la %s\n", file.name, file.size, peerName);
+}
+
+void executeCommand(int socket, const sockaddr_in& client, const char* peerName, 
+                    int openPeerPort, cmdType type)
+{
+    switch(type)
+    {
+        case CMD_DISCONNECT:
+            executeDisconnect(client, peerName, openPeerPort);
+            break;
+        case CMD_PUBLISH:
+            executePublish(socket, client, peerName, openPeerPort);
+            break;
+        case CMD_UNPUBLISH:
+            executeUnpublish(socket, client, peerName, openPeerPort);
+            break;
+        default:
+            break;
+    }
+}
+
 void* runThread(void* arg)
 {
     pthread_detach(pthread_self());
     threadArgs t = *( (threadArgs*)arg );
     bool connected = true;
+    char peerName[MAX_SIZE];
+    int openPeerPort;
+
+    readFromClient(t.clientSocket, peerName);
+    readFromClient(t.clientSocket, openPeerPort);
+
+    printf("Conectat cu user-ul %s ce va da share prin port-ul %d\n", peerName, openPeerPort);
 
     while (connected)
     {
-        char buff[MAX_SIZE];
-        readCommand(t.clientSocket, buff);
+        cmdType command;
+        readFromClient(t.clientSocket, command);
 
-        printf("Am primit: %s\n", buff);
-        if (strcmp(buff, "disconnect") == 0)
+        printf("Am primit: %d\n", (int)command);
+
+        executeCommand(t.clientSocket, t.client, peerName, openPeerPort, command);
+
+        if (command == CMD_DISCONNECT)
             connected = false;
     }
 
-    printf("Inchid thread-ul\n");
+    printf("Inchid thread-ul pentru user-ul %s\n", peerName);
     close(t.clientSocket);
     return NULL;
 }

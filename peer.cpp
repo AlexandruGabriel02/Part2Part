@@ -14,6 +14,8 @@
 #include <sstream>
 #include <filesystem>
 #include <dirent.h>
+#include <algorithm>
+#include <sys/stat.h>
 
 #define MAX_SIZE 4096
 #define MAX_CONNECTION_QUEUE 5
@@ -26,21 +28,43 @@
 
 sockaddr_in indexServer;
 int port;
-std::string hostname;
+char hostname[4096];
 std::string downLocation = ".";
+std::vector<std::string> publishedFiles; 
+
+enum fileType
+{
+    FILE_TXT,
+    FILE_AUDIO,
+    FILE_VIDEO,
+    FILE_GAME,
+    FILE_SOFTWARE,
+    FILE_OTHER,
+    FILE_UNKNOWN
+};
+
+enum cmdType
+{
+    CMD_SEARCH,
+    CMD_DOWNLOAD,
+    CMD_PUBLISH,
+    CMD_UNPUBLISH,
+    CMD_DISCONNECT,
+    CMD_DOWNLOCATION,
+    CMD_UNKNOWN
+};
+
+struct publishedFile
+{
+    char name[MAX_SIZE];
+    double size;
+    //fileType type;
+    //md5hash
+};
+
 
 namespace Utils
 {
-    enum cmdType
-    {
-        CMD_SEARCH,
-        CMD_DOWNLOAD,
-        CMD_PUBLISH,
-        CMD_UNPUBLISH,
-        CMD_DISCONNECT,
-        CMD_DOWNLOCATION,
-        CMD_UNKNOWN
-    };
     const char* validCmd[] = {"search", "download", "publish", "unpublish", "disconnect", "downlocation"};
     const int cmdCount = 6;
 
@@ -49,6 +73,14 @@ namespace Utils
         int msgLength = strlen(buff);
         write(socket, &msgLength, sizeof(msgLength));
         write(socket, buff, msgLength);
+    }
+
+    template <class T>
+    void writeToServer(int socket, const T& data)
+    {
+        int dataSize = sizeof(data);
+        write(socket, &dataSize, sizeof(dataSize));
+        write(socket, &data, dataSize);
     }
 
     cmdType validateCommand(char command[])
@@ -66,13 +98,6 @@ namespace Utils
         return (cmdType) index;
     }
 
-    void executeDisconnect(char command[], int socket)
-    {
-        writeToServer(socket, command);
-        close(socket);
-        exit(0);
-    }
-
     bool isDirectory(const std::string& location)
     {
         if (opendir(location.c_str()))
@@ -80,46 +105,30 @@ namespace Utils
         return false;
     }
 
-    void executeDownLocation(char command[])
+    bool fileExists(const std::string& filePath)
     {
-        std::string location, dummy;
-        std::stringstream ss(command);
-        ss >> dummy >> location;
-        dummy.clear();
-        ss >> dummy;
-
-        if (dummy.size() > 0)
-        {
-            printf("Too many arguments for this command\n");
-            fflush(stdout);
-            return;
-        }
-
-        if (!isDirectory(location))
-        {
-            printf("Invalid / non existent directory!\n");
-            fflush(stdout);
-            return;
-        }
-
-        downLocation = location;
-        printf("New download folder set successfully!\n");
-        fflush(stdout);
+        if (access(filePath.c_str(), F_OK) == 0 && !isDirectory(filePath))
+            return true;
+        return false;
     }
 
-    void executeCommand(char command[], int socket, cmdType type)
+    void setNameFromPath(char name[], const std::string& filePath)
     {
-        switch(type)
-        {
-            case CMD_DISCONNECT:
-                executeDisconnect(command, socket);
-                break;
-            case CMD_DOWNLOCATION:
-                executeDownLocation(command);
-                break;
-            default:
-                break;
-        }
+        int size = 0;
+        for (int i = filePath.size() - 1; i >= 0 && filePath[i] != '/'; i--)
+            name[size++] = filePath[i];
+        name[size] = '\0';
+
+        for (int i = 0, j = size - 1; i < j; i++, j--)
+            std::swap(name[i], name[j]);
+    }
+
+    double getFileSize(const std::string& filePath)
+    {
+        //pentru fisiere > 4GB -> stat64
+        struct stat st;
+        stat(filePath.c_str(), &st);
+        return st.st_size; // / 1024. / 1024. ;
     }
 
     int readInput(char command[])
@@ -159,9 +168,137 @@ namespace Client
         printf("conectat cu socketul %d\n", indexSocket);
     }
 
+    void sendInitialData()
+    {
+        Utils::writeToServer(indexSocket, hostname);
+        Utils::writeToServer(indexSocket, port);
+    }
+
+    void executeDisconnect(char command[], int socket)
+    {
+        Utils::writeToServer(socket, CMD_DISCONNECT);
+        close(socket);
+        exit(0);
+    }
+
+    void executeUnpublish(char command[], int socket)
+    {
+        std::stringstream ss(command);
+        std::string dummy, filePath;
+
+        ss >> dummy >> filePath;
+
+        auto it = find(publishedFiles.begin(), publishedFiles.end(), filePath);
+        if (it == publishedFiles.end())
+        {
+            printf("File is not published in order to unpublish it\n");
+            fflush(stdout);
+            return;
+        }
+
+        publishedFiles.erase(it);
+        
+        publishedFile file;
+        Utils::setNameFromPath(file.name, filePath);
+        file.size = Utils::getFileSize(filePath);
+
+        Utils::writeToServer(socket, CMD_UNPUBLISH);
+        Utils::writeToServer(socket, file);
+        //Utils::raspuns de la server
+
+        printf("File unpublished\n");
+        fflush(stdout);
+    }
+
+    void executePublish(char command[], int socket)
+    {
+        std::stringstream ss(command);
+        std::string dummy, filePath;
+
+        ss >> dummy >> filePath;
+
+        if (!Utils::fileExists(filePath))
+        {
+            printf("Invalid file path\n");
+            fflush(stdout);
+            return;
+        }
+
+        auto it = find(publishedFiles.begin(), publishedFiles.end(), filePath);
+        if (it != publishedFiles.end())
+        {
+            printf("File already published\n");
+            fflush(stdout);
+            return;
+        }
+
+        publishedFiles.push_back(filePath);
+
+        publishedFile file;
+        Utils::setNameFromPath(file.name, filePath);
+        file.size = Utils::getFileSize(filePath);
+
+        Utils::writeToServer(socket, CMD_PUBLISH);
+        Utils::writeToServer(socket, file);
+        //Utils::raspuns de la server
+
+        printf("File published\n");
+        fflush(stdout);
+    }
+
+    void executeDownLocation(char command[])
+    {
+        std::string location, dummy;
+        std::stringstream ss(command);
+        ss >> dummy >> location;
+        dummy.clear();
+        ss >> dummy;
+
+        if (dummy.size() > 0)
+        {
+            printf("Too many arguments for this command\n");
+            fflush(stdout);
+            return;
+        }
+
+        if (!Utils::isDirectory(location))
+        {
+            printf("Invalid / non existent directory!\n");
+            fflush(stdout);
+            return;
+        }
+
+        downLocation = location;
+        printf("New download folder set successfully!\n");
+        fflush(stdout);
+    }
+
+    void executeCommand(char command[], int socket, cmdType type)
+    {
+        switch(type)
+        {
+            case CMD_DISCONNECT:
+                executeDisconnect(command, socket);
+                break;
+            case CMD_DOWNLOCATION:
+                executeDownLocation(command);
+                break;
+            case CMD_PUBLISH:
+                executePublish(command, socket);
+                break;
+            case CMD_UNPUBLISH:
+                executeUnpublish(command, socket);
+                break;
+            default:
+                break;
+        }
+    }
+
     void* run(void* arg)
     {
         pthread_detach(pthread_self());
+
+        sendInitialData();
 
         INFINITE_LOOP
         {
@@ -171,16 +308,16 @@ namespace Client
 
             CHECK_CONTINUE(Utils::readInput(buff), "Max input size exceeded");
 
-            Utils::cmdType type;
+            cmdType type;
             type = Utils::validateCommand(buff);
-            if (type == Utils::CMD_UNKNOWN)
+            if (type == CMD_UNKNOWN)
             {
                 printf("Unknown command!\n");
                 fflush(stdout);
                 continue;
             }
 
-            Utils::executeCommand(buff, indexSocket, type);
+            executeCommand(buff, indexSocket, type);
         }
 
         return NULL;
