@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <mysql/mysql.h>
 #include <arpa/inet.h>
+#include <openssl/md5.h>
 
 #define PORT 2908
 #define MAX_SIZE 4096
@@ -48,7 +49,7 @@ struct publishedFile
     char name[MAX_SIZE];
     double size;
     //fileType type;
-    //md5hash
+    char hash[2 * MD5_DIGEST_LENGTH];
 };
 
 class DBManager
@@ -142,7 +143,7 @@ void executePublish(int socket, const sockaddr_in& client,
     publishedFile file;
     readFromClient(socket, file);
 
-    printf("Am primit fisierul %s de dimensiune %f de la %s\n", file.name, file.size, peerName);
+    printf("Am primit fisierul %s de dimensiune %f cu hashul %s de la %s\n", file.name, file.size, file.hash, peerName);
 }
 
 void executeUnpublish(int socket, const sockaddr_in& client,

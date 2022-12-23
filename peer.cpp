@@ -16,6 +16,8 @@
 #include <dirent.h>
 #include <algorithm>
 #include <sys/stat.h>
+#include <openssl/md5.h>
+#include <fcntl.h>
 
 #define MAX_SIZE 4096
 #define MAX_CONNECTION_QUEUE 5
@@ -31,6 +33,7 @@ int port;
 char hostname[4096];
 std::string downLocation = ".";
 std::vector<std::string> publishedFiles; 
+pthread_mutex_t mutex;
 
 enum fileType
 {
@@ -59,7 +62,7 @@ struct publishedFile
     char name[MAX_SIZE];
     double size;
     //fileType type;
-    //md5hash
+    char hash[2 * MD5_DIGEST_LENGTH];
 };
 
 
@@ -112,6 +115,32 @@ namespace Utils
         return false;
     }
 
+    void setFileHash(char hash[], const std::string& filePath)
+    {
+        char command[MAX_SIZE];
+        sprintf(command, "md5sum %s | cut -d\" \" -f1 > temp.txt", filePath.c_str());
+
+        pthread_mutex_lock(&mutex);
+
+        system(command);
+
+        int fd = open("temp.txt", O_RDONLY);
+        int size = 0;
+        char ch;
+
+        while (read(fd, &ch, 1))
+        {
+            if (ch == '\n')
+                break;
+            hash[size++] = ch;
+        }
+        hash[size] = '\0';
+
+        close(fd);
+
+        pthread_mutex_unlock(&mutex);
+    }
+
     void setNameFromPath(char name[], const std::string& filePath)
     {
         int size = 0;
@@ -128,7 +157,7 @@ namespace Utils
         //pentru fisiere > 4GB -> stat64
         struct stat st;
         stat(filePath.c_str(), &st);
-        return st.st_size; // / 1024. / 1024. ;
+        return st.st_size / 1024. / 1024. ;
     }
 
     int readInput(char command[])
@@ -237,6 +266,7 @@ namespace Client
         publishedFile file;
         Utils::setNameFromPath(file.name, filePath);
         file.size = Utils::getFileSize(filePath);
+        Utils::setFileHash(file.hash, filePath);
 
         Utils::writeToServer(socket, CMD_PUBLISH);
         Utils::writeToServer(socket, file);
