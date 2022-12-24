@@ -67,9 +67,13 @@ class DBManager
 {
 private:
     MYSQL* con;
-    void db_error_kill()
+    void db_error_warn()
     {
         fprintf(stderr, "%s\n", mysql_error(con));
+    }
+    void db_error_kill()
+    {
+        db_error_warn();
         mysql_close(con);
         exit(-1);
     }
@@ -88,6 +92,31 @@ public:
             db_error_kill();
         printf("Connected to the MySQL database\n");
         fflush(stdout);
+    }
+
+    void insert_entry(const char* peerName, unsigned int ip, int port, 
+                      const char* fileName, fileType type, double size, const char* hash)
+    {
+        char command[MAX_SIZE];
+        const char* types[] = {"text", "audio", "video", "game", "software", "other", "unknown"};
+        int index = (int) type;
+
+        sprintf(command, "INSERT INTO published VALUES (\'%s\', %d, %d, \'%s\', \'%s\', %f, \'%s\')",
+                peerName, ip, port, fileName, types[index], size, hash);
+
+        if (mysql_query(con, command))
+            db_error_warn();
+    }
+
+    void delete_entries(unsigned int ip, int port, const char* fileName, const char* hash)
+    {
+        char command[MAX_SIZE];
+
+        sprintf(command, "DELETE FROM published WHERE ip=%d AND port=%d AND file=\'%s\' AND hash=\'%s\'",
+                ip, port, fileName, hash);
+        
+        if (mysql_query(con, command))
+            db_error_warn();
     }
 };
 
@@ -155,6 +184,8 @@ void executePublish(int socket, const sockaddr_in& client,
     readFromClient(socket, file);
 
     printf("Am primit fisierul %s de dimensiune %f cu hashul %s si tipul %d de la %s\n", file.name, file.size, file.hash, file.type, peerName);
+
+    db.insert_entry(peerName, client.sin_addr.s_addr, openPeerPort, file.name, file.type, file.size, file.hash);
 }
 
 void executeUnpublish(int socket, const sockaddr_in& client,
@@ -165,6 +196,8 @@ void executeUnpublish(int socket, const sockaddr_in& client,
     readFromClient(socket, file);
 
     printf("Am primit fisierul %s de dimensiune %f de la %s\n", file.name, file.size, peerName);
+
+    db.delete_entries(client.sin_addr.s_addr, openPeerPort, file.name, file.hash);
 }
 
 void executeCommand(int socket, const sockaddr_in& client, const char* peerName, 
