@@ -194,7 +194,7 @@ public:
 
     int parse(std::string arg)
     {        
-        for (int i = 0; i < arg.size(); i++)
+        for (int i = 0; i < (int)arg.size(); i++)
         {
             if (arg[i] == ':')
             {
@@ -203,7 +203,6 @@ public:
             }
         }
         
-        int ptr = 0;
         std::string argName;
         std::stringstream ss(arg);
         ss >> argName;
