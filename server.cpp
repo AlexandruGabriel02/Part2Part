@@ -118,6 +118,17 @@ public:
         if (mysql_query(con, command))
             db_error_warn();
     }
+
+    void delete_entries(unsigned int ip, int port)
+    {
+        char command[MAX_SIZE];
+
+        sprintf(command, "DELETE FROM published WHERE ip=%d AND port=%d",
+                ip, port);
+        
+        if (mysql_query(con, command))
+            db_error_warn();
+    }
 };
 
 DBManager db;
@@ -174,6 +185,7 @@ void executeDisconnect(const sockaddr_in& client, const char* peerName,
                       int openPeerPort)
 {
     //sterge inregistrarile din baza de date
+    db.delete_entries(client.sin_addr.s_addr, openPeerPort);
 }
 
 void executePublish(int socket, const sockaddr_in& client,
