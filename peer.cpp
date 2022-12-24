@@ -51,6 +51,12 @@ enum cmdType
     CMD_UNKNOWN
 };
 
+enum responseType
+{
+    RESPONSE_ERR = -1,
+    RESPONSE_OK
+};
+
 struct publishedFile
 {
     char name[MAX_SIZE];
@@ -268,6 +274,11 @@ namespace Utils
         write(socket, &data, dataSize);
     }
 
+    void readResponse(int socket, responseType& response)
+    {
+        read(socket, &response, sizeof(response));
+    }
+
     cmdType validateCommand(char command[])
     {
         int index;
@@ -413,7 +424,15 @@ namespace Client
         
         Utils::writeToServer(socket, CMD_UNPUBLISH);
         Utils::writeToServer(socket, it->file);
-        //Utils::raspuns de la server
+
+        responseType response;
+        Utils::readResponse(socket, response);
+
+        if (response == RESPONSE_ERR)
+        {
+            print_err("Server error for the unpublish request");
+            return;
+        }
 
         publishedFiles.erase(it);
 
@@ -459,11 +478,18 @@ namespace Client
         file.type = p.getFileType();
         Utils::setFileHash(file.hash, filePath);
 
-        publishedFiles.push_back({filePath, file});
-
         Utils::writeToServer(socket, CMD_PUBLISH);
         Utils::writeToServer(socket, file);
-        //Utils::raspuns de la server
+        
+        responseType response;
+        Utils::readResponse(socket, response);
+        if (response == RESPONSE_ERR)
+        {
+            print_err("Server error for the publish request");
+            return;
+        }
+
+        publishedFiles.push_back({filePath, file});
 
         printf("File published\n");
         fflush(stdout);

@@ -63,6 +63,12 @@ struct publishedFile
     char hash[2 * MD5_DIGEST_LENGTH];
 };
 
+enum responseType
+{
+    RESPONSE_ERR = -1,
+    RESPONSE_OK
+};
+
 class DBManager
 {
 private:
@@ -94,7 +100,7 @@ public:
         fflush(stdout);
     }
 
-    void insert_entry(const char* peerName, unsigned int ip, int port, 
+    int insert_entry(const char* peerName, unsigned int ip, int port, 
                       const char* fileName, fileType type, double size, const char* hash)
     {
         char command[MAX_SIZE];
@@ -105,10 +111,15 @@ public:
                 peerName, ip, port, fileName, types[index], size, hash);
 
         if (mysql_query(con, command))
+        {
             db_error_warn();
+            return -1;
+        }
+
+        return 0;
     }
 
-    void delete_entries(unsigned int ip, int port, const char* fileName, const char* hash)
+    int delete_entries(unsigned int ip, int port, const char* fileName, const char* hash)
     {
         char command[MAX_SIZE];
 
@@ -116,10 +127,15 @@ public:
                 ip, port, fileName, hash);
         
         if (mysql_query(con, command))
+        {
             db_error_warn();
+            return -1;
+        }
+
+        return 0;
     }
 
-    void delete_entries(unsigned int ip, int port)
+    int delete_entries(unsigned int ip, int port)
     {
         char command[MAX_SIZE];
 
@@ -127,7 +143,12 @@ public:
                 ip, port);
         
         if (mysql_query(con, command))
+        {
             db_error_warn();
+            return -1;
+        }
+
+        return 0;
     }
 };
 
@@ -148,44 +169,53 @@ void initServer(sockaddr_in& server, int& serverSocket)
     CHECK_EXIT(listen(serverSocket, MAX_CONNECTION_QUEUE), "listen");
 }
 
-void killThread(const char* message)
+void executeDisconnect(const sockaddr_in& client, int openPeerPort)
+{
+    //sterge inregistrarile din baza de date
+    db.delete_entries(client.sin_addr.s_addr, openPeerPort);
+}
+
+void writeResponse(int socket, responseType response)
+{
+    write(socket, &response, sizeof(response));
+}
+
+void killThread(const char* message, const sockaddr_in& client, int openPeerPort)
 {
     printf("%s\n", message);
+    executeDisconnect(client, openPeerPort);
     pthread_exit(NULL);
 }
 
-void readFromClient(int socket, char buff[])
+int readFromClient(int socket, char buff[])
 {
     int msgLength, bytes;
     bytes = read(socket, &msgLength, sizeof(msgLength));
     if (bytes <= 0)
-        killThread("Read error. Peer probably closed unexpectedly\n");
+        return -1;
 
     bytes = read(socket, buff, msgLength);
     if (bytes <= 0)
-        killThread("Read error. Peer probably closed unexpectedly\n");
+        return -1;
 
     buff[msgLength] = '\0';
+
+    return 0;
 }
 
 template<class T>
-void readFromClient(int socket, T& data)
+int readFromClient(int socket, T& data)
 {
     int dataSize, bytes;
     bytes = read(socket, &dataSize, sizeof(dataSize));
     if (bytes <= 0)
-        killThread("Read error. Peer probably closed unexpectedly\n");
+        return -1;
 
     bytes = read(socket, &data, dataSize);
     if (bytes <= 0)
-        killThread("Read error. Peer probably closed unexpectedly\n");
-}
-
-void executeDisconnect(const sockaddr_in& client, const char* peerName, 
-                      int openPeerPort)
-{
-    //sterge inregistrarile din baza de date
-    db.delete_entries(client.sin_addr.s_addr, openPeerPort);
+        return -1;
+    
+    return 0;
 }
 
 void executePublish(int socket, const sockaddr_in& client,
@@ -193,11 +223,14 @@ void executePublish(int socket, const sockaddr_in& client,
 {
     //adauga in baza de date
     publishedFile file;
-    readFromClient(socket, file);
-
-    printf("Am primit fisierul %s de dimensiune %f cu hashul %s si tipul %d de la %s\n", file.name, file.size, file.hash, file.type, peerName);
-
-    db.insert_entry(peerName, client.sin_addr.s_addr, openPeerPort, file.name, file.type, file.size, file.hash);
+    if (readFromClient(socket, file) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", client, openPeerPort);
+    
+    responseType response;
+    response = (responseType) db.insert_entry(peerName, client.sin_addr.s_addr, 
+                            openPeerPort, file.name, file.type, file.size, file.hash);
+    
+    writeResponse(socket, response);
 }
 
 void executeUnpublish(int socket, const sockaddr_in& client,
@@ -205,11 +238,13 @@ void executeUnpublish(int socket, const sockaddr_in& client,
 {
     //scoate fisierul din baza de date
     publishedFile file;
-    readFromClient(socket, file);
+    if (readFromClient(socket, file) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", client, openPeerPort);
 
-    printf("Am primit fisierul %s de dimensiune %f de la %s\n", file.name, file.size, peerName);
+    responseType response;
+    response = (responseType) db.delete_entries(client.sin_addr.s_addr, openPeerPort, file.name, file.hash);
 
-    db.delete_entries(client.sin_addr.s_addr, openPeerPort, file.name, file.hash);
+    writeResponse(socket, response);
 }
 
 void executeCommand(int socket, const sockaddr_in& client, const char* peerName, 
@@ -218,7 +253,7 @@ void executeCommand(int socket, const sockaddr_in& client, const char* peerName,
     switch(type)
     {
         case CMD_DISCONNECT:
-            executeDisconnect(client, peerName, openPeerPort);
+            executeDisconnect(client, openPeerPort);
             break;
         case CMD_PUBLISH:
             executePublish(socket, client, peerName, openPeerPort);
@@ -239,15 +274,18 @@ void* runThread(void* arg)
     char peerName[MAX_SIZE];
     int openPeerPort;
 
-    readFromClient(t.clientSocket, peerName);
-    readFromClient(t.clientSocket, openPeerPort);
+    if (readFromClient(t.clientSocket, peerName) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", t.client, openPeerPort);
+    if (readFromClient(t.clientSocket, openPeerPort) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", t.client, openPeerPort);
 
     printf("Conectat cu user-ul %s ce va da share prin port-ul %d\n", peerName, openPeerPort);
 
     while (connected)
     {
         cmdType command;
-        readFromClient(t.clientSocket, command);
+        if (readFromClient(t.clientSocket, command) == -1)
+            killThread("Read error. Peer probably closed unexpectedly\n", t.client, openPeerPort);
 
         printf("Am primit: %d\n", (int)command);
 
