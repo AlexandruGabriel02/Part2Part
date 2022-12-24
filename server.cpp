@@ -44,11 +44,22 @@ enum cmdType
     CMD_UNKNOWN
 };
 
+enum fileType
+{
+    FILE_TXT,
+    FILE_AUDIO,
+    FILE_VIDEO,
+    FILE_GAME,
+    FILE_SOFTWARE,
+    FILE_OTHER,
+    FILE_UNKNOWN
+};
+
 struct publishedFile
 {
     char name[MAX_SIZE];
     double size;
-    //fileType type;
+    fileType type;
     char hash[2 * MD5_DIGEST_LENGTH];
 };
 
@@ -143,7 +154,7 @@ void executePublish(int socket, const sockaddr_in& client,
     publishedFile file;
     readFromClient(socket, file);
 
-    printf("Am primit fisierul %s de dimensiune %f cu hashul %s de la %s\n", file.name, file.size, file.hash, peerName);
+    printf("Am primit fisierul %s de dimensiune %f cu hashul %s si tipul %d de la %s\n", file.name, file.size, file.hash, file.type, peerName);
 }
 
 void executeUnpublish(int socket, const sockaddr_in& client,

@@ -25,15 +25,9 @@
 #define CHECK_EXIT(value, msg) { if ((value) < 0) {perror(msg); exit(-1);} }
 #define CHECK_WARN(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout);} }
 #define CHECK_CONTINUE(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout); continue;} }
+#define print_err(msg) {printf("[ERROR]: %s\n", msg); fflush(stdout);}
 
 #define INFINITE_LOOP while(1)
-
-sockaddr_in indexServer;
-int port;
-char hostname[4096];
-std::string downLocation = ".";
-std::vector<std::string> publishedFiles; 
-pthread_mutex_t mutex;
 
 enum fileType
 {
@@ -61,10 +55,198 @@ struct publishedFile
 {
     char name[MAX_SIZE];
     double size;
-    //fileType type;
+    fileType type;
     char hash[2 * MD5_DIGEST_LENGTH];
 };
 
+struct pathInfo
+{
+    std::string path;
+    publishedFile file;
+};
+
+sockaddr_in indexServer;
+int port;
+char hostname[4096];
+std::string downLocation = ".";
+std::vector<pathInfo> publishedFiles; 
+pthread_mutex_t mutex;
+
+class argParser
+{
+private:
+    //toate argumentele posibile
+    double maxSize;
+    double minSize;
+    fileType type;
+    char hash[2 * MD5_DIGEST_LENGTH];
+    //int depth;
+
+    //tipul de comanda
+    cmdType cmd;
+
+    fileType strToType(const std::string& str)
+    {
+        const char* types[] = {"text", "audio", "video", "game", "software", "other"};
+        int retType;
+        for (retType = 0; retType < 6 && str != types[retType]; retType++);
+
+        return (fileType) retType;
+    }
+
+    int parseTypeArg(std::stringstream& ss)
+    {
+        if (type != FILE_UNKNOWN)
+        {
+            print_err("Same argument used multiple times (-type)");
+            return -1;
+        }
+
+        std::string strType;
+        ss >> strType;
+        type = strToType(strType);
+        if (type == FILE_UNKNOWN)
+        {
+            print_err("Invalid -type argument");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    int parseMinsizeArg(std::stringstream& ss)
+    {
+        if (cmd != CMD_SEARCH && cmd != CMD_DOWNLOAD)
+        {
+            print_err("-minsize argument not suitable for this command");
+            return -1;
+        }
+        if (minSize != -1)
+        {
+            print_err("Same argument used multiple times (-minsize)");
+            return -1;
+        }
+
+        ss >> minSize;
+        if (minSize < 0)
+        {
+            print_err("Invalid double value for -minsize argument");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    int parseMaxsizeArg(std::stringstream& ss)
+    {
+        if (cmd != CMD_SEARCH && cmd != CMD_DOWNLOAD)
+        {
+            print_err("-maxsize argument not suitable for this command");
+            return -1;
+        }
+        if (minSize != -1)
+        {
+            print_err("Same argument used multiple times (-maxsize)");
+            return -1;
+        }
+
+        ss >> maxSize;
+        if (maxSize < 0)
+        {
+            print_err("Invalid double value for maxsize argument");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    int parseHashArg(std::stringstream& ss)
+    {
+        if (cmd != CMD_DOWNLOAD)
+        {
+            print_err("-hash argument not suitable for this command");
+            return -1;
+        }
+        if (strlen(hash) > 0)
+        {
+            print_err("Same argument used multiple times (-hash)");
+            return -1;
+        }
+
+        ss >> hash;
+
+        return 0;
+    }
+public:
+    argParser(cmdType p_cmd)
+    {
+        cmd = p_cmd;
+        maxSize = minSize = -1;
+        //depth = 0;
+        type = FILE_UNKNOWN;
+    }
+
+    int parse(std::string arg)
+    {        
+        for (int i = 0; i < arg.size(); i++)
+        {
+            if (arg[i] == ':')
+            {
+                arg[i] = ' ';
+                break;
+            }
+        }
+        
+        int ptr = 0;
+        std::string argName;
+        std::stringstream ss(arg);
+        ss >> argName;
+
+        if (argName[0] != '-')
+        {
+            print_err("Argument error. Use \'-\' to begin an argument");
+            return -1;
+        }
+        
+        if (argName == "-type")
+            return parseTypeArg(ss);
+        else if (argName == "-minsize")
+            return parseMinsizeArg(ss);
+        else if (argName == "-maxsize")
+            return parseMaxsizeArg(ss);
+        else if (argName == "-hash")
+            return parseHashArg(ss);
+        else 
+        {
+            //to do (maybe): add recursive arg 
+            print_err("Unrecognized argument");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    double getMinSize()
+    {
+        return minSize;
+    }
+
+    double getMaxSize()
+    {
+        return maxSize;
+    }
+
+    fileType getFileType()
+    {
+        return type;
+    }
+
+    void getHash(char p_hash[])
+    {
+        strcpy(p_hash, hash);
+    }
+    
+};
 
 namespace Utils
 {
@@ -217,23 +399,23 @@ namespace Client
 
         ss >> dummy >> filePath;
 
-        auto it = find(publishedFiles.begin(), publishedFiles.end(), filePath);
-        if (it == publishedFiles.end())
+        std::vector<pathInfo>::iterator it;
+        for (it = publishedFiles.begin(); it != publishedFiles.end() && it->path != filePath; it++)
         {
-            printf("File is not published in order to unpublish it\n");
-            fflush(stdout);
-            return;
+            //empty
         }
 
-        publishedFiles.erase(it);
+        if (it == publishedFiles.end())
+        {
+            print_err("File is not published in order to unpublish it");
+            return;
+        }
         
-        publishedFile file;
-        Utils::setNameFromPath(file.name, filePath);
-        file.size = Utils::getFileSize(filePath);
-
         Utils::writeToServer(socket, CMD_UNPUBLISH);
-        Utils::writeToServer(socket, file);
+        Utils::writeToServer(socket, it->file);
         //Utils::raspuns de la server
+
+        publishedFiles.erase(it);
 
         printf("File unpublished\n");
         fflush(stdout);
@@ -248,25 +430,36 @@ namespace Client
 
         if (!Utils::fileExists(filePath))
         {
-            printf("Invalid file path\n");
-            fflush(stdout);
+            print_err("Invalid file path");
             return;
         }
 
-        auto it = find(publishedFiles.begin(), publishedFiles.end(), filePath);
+        std::vector<pathInfo>::iterator it;
+        for (it = publishedFiles.begin(); it != publishedFiles.end() && it->path != filePath; it++)
+        {
+            //empty
+        }
         if (it != publishedFiles.end())
         {
-            printf("File already published\n");
-            fflush(stdout);
+            print_err("File already published");
             return;
         }
 
-        publishedFiles.push_back(filePath);
+        std::string arg;
+        argParser p(CMD_PUBLISH);
+        while (ss >> arg)
+        {
+            if(p.parse(arg) == -1)
+                return;
+        }
 
         publishedFile file;
         Utils::setNameFromPath(file.name, filePath);
         file.size = Utils::getFileSize(filePath);
+        file.type = p.getFileType();
         Utils::setFileHash(file.hash, filePath);
+
+        publishedFiles.push_back({filePath, file});
 
         Utils::writeToServer(socket, CMD_PUBLISH);
         Utils::writeToServer(socket, file);
@@ -286,15 +479,13 @@ namespace Client
 
         if (dummy.size() > 0)
         {
-            printf("Too many arguments for this command\n");
-            fflush(stdout);
+            print_err("Too many arguments for this command");
             return;
         }
 
         if (!Utils::isDirectory(location))
         {
-            printf("Invalid / non existent directory!\n");
-            fflush(stdout);
+            print_err("Invalid / non existent directory!");
             return;
         }
 
@@ -342,8 +533,7 @@ namespace Client
             type = Utils::validateCommand(buff);
             if (type == CMD_UNKNOWN)
             {
-                printf("Unknown command!\n");
-                fflush(stdout);
+                print_err("Unknown command!");
                 continue;
             }
 
