@@ -71,6 +71,21 @@ struct pathInfo
     publishedFile file;
 };
 
+struct argsInfo
+{
+    char name[MAX_SIZE];
+    double maxSize;
+    double minSize;
+    fileType type;
+    char hash[2 * MD5_DIGEST_LENGTH];
+};
+
+struct peerInfo
+{
+    unsigned int ip;
+    int port;
+};
+
 sockaddr_in indexServer;
 int port;
 char hostname[4096];
@@ -150,7 +165,7 @@ private:
             print_err("-maxsize argument not suitable for this command");
             return -1;
         }
-        if (minSize != -1)
+        if (maxSize != -1)
         {
             print_err("Same argument used multiple times (-maxsize)");
             return -1;
@@ -190,6 +205,7 @@ public:
         maxSize = minSize = -1;
         //depth = 0;
         type = FILE_UNKNOWN;
+        strcpy(hash, "");
     }
 
     int parse(std::string arg)
@@ -261,16 +277,32 @@ namespace Utils
     void writeToServer(int socket, char buff[])
     {
         int msgLength = strlen(buff);
-        write(socket, &msgLength, sizeof(msgLength));
-        write(socket, buff, msgLength);
+        CHECK_EXIT(write(socket, &msgLength, sizeof(msgLength)), "Can't write to server\n");
+        CHECK_EXIT(write(socket, buff, msgLength), "Can't write to server\n");
     }
 
     template <class T>
     void writeToServer(int socket, const T& data)
     {
         int dataSize = sizeof(data);
-        write(socket, &dataSize, sizeof(dataSize));
-        write(socket, &data, dataSize);
+        CHECK_EXIT(write(socket, &dataSize, sizeof(dataSize)), "Can't write to server\n");
+        CHECK_EXIT(write(socket, &data, dataSize), "Can't write to server\n");
+    }
+
+    void readFromServer(int socket, char buff[])
+    {
+        int msgLength;
+        CHECK_EXIT(read(socket, &msgLength, sizeof(msgLength)), "Can't read from server!\n");
+        CHECK_EXIT(read(socket, buff, msgLength), "Can't read from server!\n");
+        buff[msgLength] = '\0';
+    }
+
+    template<class T>
+    void readFromServer(int socket, T& data)
+    {
+        int dataSize;
+        CHECK_EXIT(read(socket, &dataSize, sizeof(dataSize)), "Can't read from server!\n");
+        CHECK_EXIT(read(socket, &data, dataSize), "Can't read from server!\n");
     }
 
     void readResponse(int socket, responseType& response)
@@ -519,6 +551,88 @@ namespace Client
         fflush(stdout);
     }
 
+    void executeSearch(char command[], int socket)
+    {
+        argsInfo searchInfo;
+        std::string dummy;
+        std::stringstream ss(command);
+
+        ss >> dummy >> searchInfo.name;
+
+        std::string arg;
+        argParser p(CMD_SEARCH);
+        while (ss >> arg)
+        {
+            if (p.parse(arg) == -1)
+                return;
+        }
+
+        searchInfo.type = p.getFileType();
+        searchInfo.minSize = p.getMinSize();
+        searchInfo.maxSize = p.getMaxSize();
+
+        Utils::writeToServer(socket, CMD_SEARCH);
+        Utils::writeToServer(socket, searchInfo);
+
+        responseType response;
+        Utils::readResponse(socket, response);
+        if (response == RESPONSE_ERR)
+        {
+            print_err("Server error for the search request");
+            return;
+        }
+
+        char searchResponse[2 * MAX_SIZE];
+        Utils::readFromServer(socket, searchResponse);
+
+        printf("Search results:\nUsername | File | Type | Size(MB) | Hash\n%s", searchResponse);
+        fflush(stdout);
+    }
+
+    void executeDownload(char command[], int socket)
+    {
+        argsInfo searchInfo;
+        std::string dummy;
+        std::stringstream ss(command);
+
+        ss >> dummy >> searchInfo.name;
+
+        std::string arg;
+        argParser p(CMD_DOWNLOAD);
+        while (ss >> arg)
+        {
+            if (p.parse(arg) == -1)
+                return;
+        }
+
+        searchInfo.type = p.getFileType();
+        searchInfo.minSize = p.getMinSize();
+        searchInfo.maxSize = p.getMaxSize();
+        p.getHash(searchInfo.hash);
+
+        Utils::writeToServer(socket, CMD_DOWNLOAD);
+        Utils::writeToServer(socket, searchInfo);
+
+        responseType response;
+        Utils::readResponse(socket, response);
+        if (response == RESPONSE_ERR)
+        {
+            print_err("Server error for the download request");
+            return;
+        }
+
+        peerInfo peer;
+        Utils::readFromServer(socket, peer);
+
+        if (peer.ip == 0 && peer.port == 0)
+        {
+            printf("No peer found for the specified download requirements\n");
+            return;
+        }
+
+        printf("Peer found, initiating connection at ip %d and port %d...\n", peer.ip, peer.port);
+    }
+
     void executeCommand(char command[], int socket, cmdType type)
     {
         switch(type)
@@ -535,6 +649,11 @@ namespace Client
             case CMD_UNPUBLISH:
                 executeUnpublish(command, socket);
                 break;
+            case CMD_SEARCH:
+                executeSearch(command, socket);
+                break;
+            case CMD_DOWNLOAD:
+                executeDownload(command, socket);
             default:
                 break;
         }
@@ -549,7 +668,7 @@ namespace Client
         INFINITE_LOOP
         {
             char buff[MAX_SIZE];
-            printf(">: ");
+            printf("\n>: ");
             fflush(stdout);
 
             CHECK_CONTINUE(Utils::readInput(buff), "Max input size exceeded");

@@ -63,6 +63,21 @@ struct publishedFile
     char hash[2 * MD5_DIGEST_LENGTH];
 };
 
+struct argsInfo
+{
+    char name[MAX_SIZE];
+    double maxSize;
+    double minSize;
+    fileType type;
+    char hash[2 * MD5_DIGEST_LENGTH];
+};
+
+struct peerInfo
+{
+    unsigned int ip;
+    int port;
+};
+
 enum responseType
 {
     RESPONSE_ERR = -1,
@@ -150,6 +165,128 @@ public:
 
         return 0;
     }
+
+    int retrieve_entries(char output[], const argsInfo& searchInfo)
+    {
+        char command[2 * MAX_SIZE];
+        strcpy(output, "");
+        sprintf(command, "SELECT username, file, type, size, hash FROM published WHERE size >= %f", 
+               searchInfo.minSize);
+
+        if (strcmp(searchInfo.name, "*") != 0)
+        {
+            char add[MAX_SIZE + 20];
+            sprintf(add, " AND file = \'%s\'", searchInfo.name);
+            strcat(command, add);
+        }
+
+        if (searchInfo.maxSize != -1)
+        {
+            char add[MAX_SIZE];
+            sprintf(add, " AND size <= %f", searchInfo.maxSize);
+            strcat(command, add);
+        }
+
+        if (searchInfo.type != FILE_UNKNOWN)
+        {
+            const char* types[] = {"text", "audio", "video", "game", "software", "other", "unknown"};
+            char add[MAX_SIZE];
+            sprintf(add, " AND type = \'%s\'", types[(int)searchInfo.type]);
+            strcat(command, add);
+        }
+
+        printf("%s\n", command);
+
+        if (mysql_query(con, command))
+        {
+            db_error_warn();
+            return -1;
+        }
+
+        MYSQL_RES *result = mysql_store_result(con);
+        if (result == NULL)
+        {
+            db_error_warn();
+            return -1;
+        }
+
+        int num_fields = mysql_num_fields(result);
+        MYSQL_ROW row;
+        while ((row = mysql_fetch_row(result)))
+        {
+            for(int i = 0; i < num_fields; i++)
+            {
+                strcat(output, row[i] ? row[i] : "NULL");
+                strcat(output, " ");
+            }
+
+            strcat(output, "\n");
+        }
+
+        mysql_free_result(result);
+        return 0;
+    }
+
+    int retrieve_peer(peerInfo& peer, const argsInfo& searchInfo)
+    {
+        peer.ip = peer.port = 0;
+
+        char command[2 * MAX_SIZE];
+        sprintf(command, "SELECT * FROM published WHERE size >= %f", 
+               searchInfo.minSize);
+
+        if (strcmp(searchInfo.name, "*") != 0)
+        {
+            char add[MAX_SIZE + 20];
+            sprintf(add, " AND file = \'%s\'", searchInfo.name);
+            strcat(command, add);
+        }
+
+        if (searchInfo.maxSize != -1)
+        {
+            char add[MAX_SIZE];
+            sprintf(add, " AND size <= %f", searchInfo.maxSize);
+            strcat(command, add);
+        }
+
+        if (searchInfo.type != FILE_UNKNOWN)
+        {
+            const char* types[] = {"text", "audio", "video", "game", "software", "other", "unknown"};
+            char add[MAX_SIZE];
+            sprintf(add, " AND type = \'%s\'", types[(int)searchInfo.type]);
+            strcat(command, add);
+        }
+
+        if (strlen(searchInfo.hash) > 0)
+        {
+            char add[MAX_SIZE];
+            sprintf(add, " AND hash = \'%s\'", searchInfo.hash);
+            strcat(command, add);
+        }
+
+        if (mysql_query(con, command))
+        {
+            db_error_warn();
+            return -1;
+        }
+
+        MYSQL_RES *result = mysql_store_result(con);
+        if (result == NULL)
+        {
+            db_error_warn();
+            return -1;
+        }
+
+        MYSQL_ROW row;
+        if ((row = mysql_fetch_row(result)))
+        {
+            peer.ip = atoi(row[1]);
+            peer.port = atoi(row[2]);
+        }
+
+        mysql_free_result(result);
+        return 0;
+    }
 };
 
 DBManager db;
@@ -218,6 +355,21 @@ int readFromClient(int socket, T& data)
     return 0;
 }
 
+void writeToClient(int socket, char buff[])
+{
+    int msgLength = strlen(buff);
+    write(socket, &msgLength, sizeof(msgLength));
+    write(socket, buff, msgLength);
+}
+
+template <class T>
+void writeToClient(int socket, const T& data)
+{
+    int dataSize = sizeof(data);
+    write(socket, &dataSize, sizeof(dataSize));
+    write(socket, &data, dataSize);
+}
+
 void executePublish(int socket, const sockaddr_in& client,
                     const char* peerName, int openPeerPort)
 {
@@ -247,6 +399,38 @@ void executeUnpublish(int socket, const sockaddr_in& client,
     writeResponse(socket, response);
 }
 
+void executeSearch(int socket, const sockaddr_in& client, int openPeerPort)
+{
+    argsInfo searchInfo;
+    if (readFromClient(socket, searchInfo) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", client, openPeerPort);
+    
+    char searchResult[2 * MAX_SIZE];
+
+    responseType response;
+    response = (responseType) db.retrieve_entries(searchResult, searchInfo);
+    writeResponse(socket, response);
+
+    if (response == RESPONSE_OK)
+        writeToClient(socket, searchResult);
+}
+
+void executeDownload(int socket, const sockaddr_in& client, int openPeerPort)
+{
+    argsInfo searchInfo;
+    if (readFromClient(socket, searchInfo) == -1)
+        killThread("Read error. Peer probably closed unexpectedly\n", client, openPeerPort);
+    
+    peerInfo peer;
+
+    responseType response;
+    response = (responseType) db.retrieve_peer(peer, searchInfo);
+    writeResponse(socket, response);
+
+    if (response == RESPONSE_OK)
+        writeToClient(socket, peer);
+}
+
 void executeCommand(int socket, const sockaddr_in& client, const char* peerName, 
                     int openPeerPort, cmdType type)
 {
@@ -261,6 +445,11 @@ void executeCommand(int socket, const sockaddr_in& client, const char* peerName,
         case CMD_UNPUBLISH:
             executeUnpublish(socket, client, peerName, openPeerPort);
             break;
+        case CMD_SEARCH:
+            executeSearch(socket, client, openPeerPort);
+            break;
+        case CMD_DOWNLOAD:
+            executeDownload(socket, client, openPeerPort);
         default:
             break;
     }
