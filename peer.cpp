@@ -22,6 +22,7 @@
 #define MAX_SIZE 4096
 #define MAX_CONNECTION_QUEUE 5
 
+#define CHECK_RET(value, msg) { if ((value) < 0) {perror(msg); return;} }
 #define CHECK_EXIT(value, msg) { if ((value) < 0) {perror(msg); exit(-1);} }
 #define CHECK_WARN(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout);} }
 #define CHECK_CONTINUE(value, msg) { if ((value) < 0) {printf("Warning: "); printf(msg); printf("\n"); fflush(stdout); continue;} }
@@ -310,6 +311,43 @@ namespace Utils
         read(socket, &response, sizeof(response));
     }
 
+    void receiveFile(int socket, char fileName[])
+    {
+        std::cout << fileName << "\n";
+        std::string path = downLocation + "/" + fileName;
+        std::cout << path << "\n";
+        int file_fd;
+        char buff[MAX_SIZE];
+        int chunkSize = MAX_SIZE;
+
+        CHECK_RET(file_fd = open(path.c_str(), O_WRONLY), "Can't open for file transfer");
+
+        while (chunkSize == MAX_SIZE)
+        {
+            chunkSize = read(socket, buff, MAX_SIZE);
+            write(file_fd, buff, chunkSize);
+        }
+
+        close(file_fd);
+    }
+
+    void sendFile(int socket, const std::string& path)
+    {
+        int file_fd;
+        char buff[MAX_SIZE];
+        int chunkSize = MAX_SIZE;
+
+        CHECK_RET(file_fd = open(path.c_str(), O_RDONLY), "Can't open for file transfer");
+
+        while (chunkSize == MAX_SIZE)
+        {
+            chunkSize = read(file_fd, buff, MAX_SIZE);
+            write(socket, buff, chunkSize);
+        }
+
+        close(file_fd);
+    }
+
     cmdType validateCommand(char command[])
     {
         int index;
@@ -589,6 +627,41 @@ namespace Client
         fflush(stdout);
     }
 
+    void p2pConnection(const peerInfo& peer, char fileName[], char hash[])
+    {
+        int peerSocket;
+        sockaddr_in serverPeer;
+
+        serverPeer.sin_addr.s_addr = peer.ip;
+        serverPeer.sin_family = AF_INET;
+        serverPeer.sin_port = htons(peer.port);
+
+        CHECK_RET(peerSocket = socket(AF_INET, SOCK_STREAM, 0), "Can't create socket for p2p connection\n");
+        CHECK_RET(connect(peerSocket, (sockaddr*)&serverPeer, sizeof(serverPeer)), "Can't connect to peer for file transfer\n");
+        printf("Connected!\n");
+        fflush(stdout);
+
+        //verific daca exista fisierul
+        Utils::writeToServer(peerSocket, hash);
+
+        responseType response;
+        Utils::readFromServer(peerSocket, response);
+        if (response == RESPONSE_ERR)
+        {
+            print_err("Error finding searched file. Try downloading again");
+            return;
+        }
+
+        printf("Starting file transfer...\n");
+        fflush(stdout);
+
+        Utils::receiveFile(peerSocket, fileName);
+
+        printf("Done!\n");
+        fflush(stdout);
+
+    }
+
     void executeDownload(char command[], int socket)
     {
         argsInfo searchInfo;
@@ -622,7 +695,12 @@ namespace Client
         }
 
         peerInfo peer;
+        char hash[2 * MD5_DIGEST_LENGTH];
+        char fileName[MAX_SIZE];
+
         Utils::readFromServer(socket, peer);
+        Utils::readFromServer(socket, hash);
+        Utils::readFromServer(socket, fileName);
 
         if (peer.ip == 0 && peer.port == 0)
         {
@@ -630,7 +708,24 @@ namespace Client
             return;
         }
 
+        if (Utils::fileExists(downLocation + "/" + fileName))
+        {
+            printf("File with the name %s already exists at your download location, so it will get overwritten. Continue? (y/n)\n",
+                    fileName);
+            char ch;
+            std::cin >> ch;
+
+            if (ch != 'y' && ch != 'Y')
+            {
+                printf("Cancelled file download\n");
+                return;
+            }
+        }
+        std::cout << fileName << "\n";
+
         printf("Peer found, initiating connection at ip %d and port %d...\n", peer.ip, peer.port);
+        p2pConnection(peer, fileName, hash);
+        
     }
 
     void executeCommand(char command[], int socket, cmdType type)
@@ -708,6 +803,32 @@ namespace Server
     void* run(void* arg)
     {
         pthread_detach(pthread_self());
+        int clientSocket = * (int*)arg;
+        char hash[2 * MD5_DIGEST_LENGTH];
+        responseType response = RESPONSE_ERR;
+        std::string path = ".";
+
+        //citesc de la peer hashul fisierului pe care il doreste
+        Utils::readFromServer(clientSocket, hash);
+
+        //verific daca fisierul nu mai exista din oarecare motiv
+        for(auto& it : publishedFiles)
+        {
+            if (strcmp(it.file.hash, hash) == 0)
+            {
+                path = it.path;
+                break;
+            }
+        }
+
+        if (Utils::fileExists(path))
+            response = RESPONSE_OK;
+
+        //confirm request-ul ca fiind ok/eroare
+        Utils::writeToServer(clientSocket, response);
+
+        if (response == RESPONSE_OK)
+            Utils::sendFile(clientSocket, path);
 
         return NULL;
     }
@@ -758,7 +879,7 @@ int main(int argc, char* argv[])
         CHECK_CONTINUE(clientSocket = accept(serverSocket, (sockaddr*) &client, &clientSize), "accept error");
 
         pthread_t thread;
-        pthread_create(&thread, NULL, &Server::run, NULL);
+        pthread_create(&thread, NULL, &Server::run, &clientSocket);
     }
 
     return 0;

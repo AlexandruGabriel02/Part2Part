@@ -227,7 +227,7 @@ public:
         return 0;
     }
 
-    int retrieve_peer(peerInfo& peer, const argsInfo& searchInfo)
+    int retrieve_peer(peerInfo& peer, char fileName[], char hash[], const argsInfo& searchInfo)
     {
         peer.ip = peer.port = 0;
 
@@ -282,6 +282,10 @@ public:
         {
             peer.ip = atoi(row[1]);
             peer.port = atoi(row[2]);
+            sprintf(fileName, "%s", row[3]); //fix this
+            fileName[strlen(fileName)] = '\0';
+            sprintf(hash, "%s", row[6]);
+            std::cout << fileName << " " << hash << "\n";
         }
 
         mysql_free_result(result);
@@ -422,13 +426,19 @@ void executeDownload(int socket, const sockaddr_in& client, int openPeerPort)
         killThread("Read error. Peer probably closed unexpectedly\n", client, openPeerPort);
     
     peerInfo peer;
+    char hash[2 * MD5_DIGEST_LENGTH];
+    char fileName[MAX_SIZE];
 
     responseType response;
-    response = (responseType) db.retrieve_peer(peer, searchInfo);
+    response = (responseType) db.retrieve_peer(peer, fileName, hash, searchInfo);
     writeResponse(socket, response);
 
     if (response == RESPONSE_OK)
+    {
         writeToClient(socket, peer);
+        writeToClient(socket, hash);
+        writeToClient(socket, fileName);
+    }
 }
 
 void executeCommand(int socket, const sockaddr_in& client, const char* peerName, 
