@@ -21,6 +21,7 @@
 
 #define MAX_SIZE 4096
 #define MAX_CONNECTION_QUEUE 5
+#define MD5_HASH_SIZE 33
 
 #define CHECK_RET(value, msg) { if ((value) < 0) {perror(msg); return;} }
 #define CHECK_EXIT(value, msg) { if ((value) < 0) {perror(msg); exit(-1);} }
@@ -63,7 +64,7 @@ struct publishedFile
     char name[MAX_SIZE];
     double size;
     fileType type;
-    char hash[2 * MD5_DIGEST_LENGTH];
+    char hash[MD5_HASH_SIZE];
 };
 
 struct pathInfo
@@ -78,7 +79,7 @@ struct argsInfo
     double maxSize;
     double minSize;
     fileType type;
-    char hash[2 * MD5_DIGEST_LENGTH];
+    char hash[MD5_HASH_SIZE];
 };
 
 struct peerInfo
@@ -101,7 +102,7 @@ private:
     double maxSize;
     double minSize;
     fileType type;
-    char hash[2 * MD5_DIGEST_LENGTH];
+    char hash[MD5_HASH_SIZE];
     //int depth;
 
     //tipul de comanda
@@ -313,14 +314,12 @@ namespace Utils
 
     void receiveFile(int socket, char fileName[])
     {
-        std::cout << fileName << "\n";
         std::string path = downLocation + "/" + fileName;
-        std::cout << path << "\n";
         int file_fd;
         char buff[MAX_SIZE];
         int chunkSize = MAX_SIZE;
 
-        CHECK_RET(file_fd = open(path.c_str(), O_WRONLY), "Can't open for file transfer");
+        CHECK_RET(file_fd = open(path.c_str(), O_WRONLY | O_CREAT, S_IRWXU), "Can't open for file transfer");
 
         while (chunkSize == MAX_SIZE)
         {
@@ -695,7 +694,7 @@ namespace Client
         }
 
         peerInfo peer;
-        char hash[2 * MD5_DIGEST_LENGTH];
+        char hash[MD5_HASH_SIZE];
         char fileName[MAX_SIZE];
 
         Utils::readFromServer(socket, peer);
@@ -721,7 +720,6 @@ namespace Client
                 return;
             }
         }
-        std::cout << fileName << "\n";
 
         printf("Peer found, initiating connection at ip %d and port %d...\n", peer.ip, peer.port);
         p2pConnection(peer, fileName, hash);
@@ -804,7 +802,7 @@ namespace Server
     {
         pthread_detach(pthread_self());
         int clientSocket = * (int*)arg;
-        char hash[2 * MD5_DIGEST_LENGTH];
+        char hash[MD5_HASH_SIZE];
         responseType response = RESPONSE_ERR;
         std::string path = ".";
 
@@ -858,6 +856,7 @@ int main(int argc, char* argv[])
 
     /* initializare */
     initPeer(argv);
+    pthread_mutex_init(&mutex, NULL);
 
     /* execut partea de "client" din peer */
     Client::initConnection(); //conectarea la serverul central
