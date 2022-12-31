@@ -197,8 +197,6 @@ public:
             strcat(command, add);
         }
 
-        printf("%s\n", command);
-
         if (mysql_query(con, command))
         {
             db_error_warn();

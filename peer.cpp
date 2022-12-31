@@ -502,7 +502,9 @@ namespace Client
             return;
         }
 
+        pthread_mutex_lock(&mutex);
         publishedFiles.erase(it);
+        pthread_mutex_unlock(&mutex);
 
         printf("File unpublished\n");
         fflush(stdout);
@@ -557,7 +559,9 @@ namespace Client
             return;
         }
 
+        pthread_mutex_lock(&mutex);
         publishedFiles.push_back({filePath, file});
+        pthread_mutex_unlock(&mutex);
 
         printf("File published\n");
         fflush(stdout);
@@ -810,6 +814,7 @@ namespace Server
         Utils::readFromServer(clientSocket, hash);
 
         //verific daca fisierul nu mai exista din oarecare motiv
+        pthread_mutex_lock(&mutex);
         for(auto& it : publishedFiles)
         {
             if (strcmp(it.file.hash, hash) == 0)
@@ -818,6 +823,7 @@ namespace Server
                 break;
             }
         }
+        pthread_mutex_unlock(&mutex);
 
         if (Utils::fileExists(path))
             response = RESPONSE_OK;
